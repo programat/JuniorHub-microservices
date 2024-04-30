@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, Response, json
 from parser import parse_tinkoff_internships
 
 app = Flask(__name__)
@@ -10,9 +10,14 @@ def index():
 
 
 @app.route('/internships')
-def parse_vacancies():
-    vacancies = parse_tinkoff_internships()
-    return jsonify(vacancies)
+def get_internships():
+    internships_data = parse_tinkoff_internships()
+    if internships_data:
+        response = Response(json.dumps(internships_data, ensure_ascii=False),
+                            content_type='application/json; charset=utf-8')
+        return response
+    else:
+        return jsonify({"error": "Data not found"}), 404
 
 
 if __name__ == '__main__':

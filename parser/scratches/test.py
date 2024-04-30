@@ -19,7 +19,7 @@ def extract_mobile_panels_slider(data):
     return results
 
 # Загрузка данных из файла
-with open("../tinkoff.json", "r", encoding="utf-8") as file:
+with open("../../tinkoff.json", "r", encoding="utf-8") as file:
     json_data = json.load(file)
 
 # Извлечение данных и сохранение результатов в массив

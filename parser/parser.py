@@ -3,151 +3,107 @@ import json
 import requests
 from bs4 import BeautifulSoup
 
-
-def find_last_content(block):
-    if "content" in block and block["content"] == []:
-        return block
-    elif "content" in block:
-        for item in block["content"]:
-            result = find_last_content(item)
-            print('rec', result)
-            if result:
-                return result
-    return None
+BASE_URL = "https://fintech.tinkoff.ru"
 
 
-def get_internship_data(data):
-    """
-    Анализирует JSON и возвращает список направлений стажировок с информацией.
+def extract_text(text, pattern):
+    """Извлекает текст из строки по заданному шаблону."""
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1).strip() if match else ""
 
-    Args:
-        data: Словарь, содержащий JSON данные.
 
-    Returns:
-        Список словарей, где каждый словарь представляет одно направление
-        стажировки с информацией о названии, месте проведения и статусе набора.
-    """
-    content_config = data["stores"]["router"]["currentRoute"]["config"]["content"]["content"]
-    internships = list()
-    print(content_config)
-    for item in content_config:
-        result = find_last_content(item)
-        # print(item)
-        if result and result["type"] == "mobilePanelsSlider":
-            internships.append(result)
-        else:
-            continue
-    return internships
+def parse_position(panel):
+    """Парсит информацию о вакансии из панели."""
+    soup = BeautifulSoup(panel['title']['text'], 'html.parser')
+    full_text = soup.get_text(strip=True)
 
-    # Ищем блок с названием "mobileTabsContainer"
-    # for _ in content_config:
-    #     for block in content_config.values() if isinstance(content_config, dict) else content_config:
-    #         print(block)
-    #         for item in block:
-    #             print(item)
-    #             if item["type"] == "mobilePanelsSlider":
-    #                 tabs_data = item["content"]
-    #                 break
-    #         else:
-    #             return []  # Если блок не найден, возвращаем пустой список
+    # Извлекаем area и title, учитывая возможность отсутствия area
+    div_text = soup.find('div', class_='text_2')
+    if div_text:
+        area = div_text.get_text(strip=True)
+        title = full_text.replace(area, "").strip()
+    else:
+        area = ""
+        title = full_text
 
-    # internships = []
-    # # Перебираем вкладки (аналитика, разработка, дизайн, QA, менеджмент)
-    # for tab in tabs_data:
-    #     # Внутри каждой вкладки находим "mobilePanelsSlider"
-    #     for panel_slider in tab["content"]:
-    #         if panel_slider["type"] == "mobilePanelsSlider":
-    #             # Внутри слайдера перебираем карточки направлений
-    #             for panel in panel_slider["properties"]["panelList"]:
-    #                 title_text = panel["title"]["text"]
-    #                 # Извлекаем место проведения из текста заголовка
-    #                 location = title_text.split("<div class=\"text_2\">")[1].split("</span>")[0]
-    #                 # Извлекаем название направления
-    #                 name = title_text.split("<div class=\"header_2\">")[1].split("</div>")[0]
-    #                 # Извлекаем статус набора
-    #                 status = panel["subtitle"]["text"].split("<p>")[1].split("</span>")[0]
-    #                 internships.append({
-    #                     "name": name,
-    #                     "location": location,
-    #                     "status": status,
-    #                     "url": panel["slideLink"]["url"]
-    #                 })
+    # Извлекаем description, удаляя HTML теги
+    description_soup = BeautifulSoup(panel['subtitle']['text'], 'html.parser')
+    description = description_soup.find('p').get_text(separator=' ', strip=True)
+
+    status = extract_text(panel['subtitle']['text'], r'background-color:;">(.+?)</span>')
+    link = BASE_URL + panel['slideLink']['url']
+    return {
+        "title": title,
+        "description": description,
+        "status": status,
+        "link": link,
+        "area": area
+    }
+
+
+def parse_category(tab):
+    """Парсит информацию о категории стажировок из вкладки."""
+    category = tab['properties']['name']['text']
+    positions = [parse_position(panel) for panel in tab['content'][0]['properties']['panelList']]
+    return {
+        "category": category,
+        "positions": positions
+    }
+
+
+def parse_internships(data):
+    """Парсит список данных и преобразует его в нужный формат."""
+    internships = [parse_category(tab) for tab in data]
+    return {"internships": internships}
+
+
+def extract_mobile_panels_slider(data):
+    """Извлекает данные из блока mobilePanelsSlider."""
+    results = []
+
+    def recurse_items(items, parent=None):
+        if isinstance(items, dict):
+            if items.get('type') == 'mobilePanelsSlider':
+                results.append(parent)
+            for key, value in items.items():
+                if isinstance(value, (dict, list)):
+                    recurse_items(value, items)
+        elif isinstance(items, list):
+            for item in items:
+                recurse_items(item, parent)
+
+    recurse_items(data)
+    return results
 
 
 def parse_tinkoff_internships():
+    """
+    Парсит стажировки с сайта Тинькофф и возвращает результат в формате JSON.
+    """
     url = 'https://fintech.tinkoff.ru/start/'
     response = requests.get(url)
     response.encoding = 'utf-8'
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    internships = []
-
     # Найти скрипт с id="__TRAMVAI_STATE__"
     script = soup.find('script', {'id': '__TRAMVAI_STATE__'})
+    if not script:
+        return None  # Обработка случая, если скрипт не найден
 
-    if script:
-        # Извлечь содержимое скрипта
-        json_data = script.string
+    # Извлечь содержимое скрипта и распарсить JSON
+    json_data = json.loads(script.string)
 
-        # Распарсить JSON
-        data = json.loads(json_data)
-        with open('tinkoff.json', 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+    # Извлечь данные из нужного блока
+    mobile_panels_sliders = extract_mobile_panels_slider(json_data)
+    with open("tinkoff_internships.json", "w", encoding="utf-8") as f:
+        json.dump(mobile_panels_sliders, f, ensure_ascii=False, indent=4)
 
-        # Получить массив блоков контента
-        content_blocks = data['stores']['actionTramvai']['serverState']['content']
-
-        # Пройтись по блокам и найти блоки со стажировками
-        for block in content_blocks:
-            if block['type'] == 'desktopTab':
-                internship_blocks = block['content']
-
-                for internship_block in internship_blocks:
-                    if internship_block['type'] == 'desktopTextPanels':
-                        for panel in internship_block['panels']:
-                            title = panel['title']
-                            description = panel['subtitle']
-                            status = panel['badges'][0]['title'] if panel['badges'] else ''
-
-                            internship = {
-                                'title': title,
-                                'description': description,
-                                'status': status
-                            }
-                            internships.append(internship)
-
-    return internships
+    # Парсинг стажировок
+    result = parse_internships(mobile_panels_sliders)
+    return result
 
 
 if __name__ == '__main__':
-
-    with open('../tinkoff.json', 'r', encoding='utf-8') as f:
-        data = json.load(f)
-
-    # Пример использования
-    internships_json = get_internship_data(data)
-    print(internships_json)
-
-    internships = []
-
-    for item in internships_json:
-        if item['type'] == 'mobilePanelsSlider':
-            text = item['properties']['panelList']
-            for block in text:
-                title = block['title']['text']
-                description = block['subtitle']['text']
-                status = block['subtitle']['text']
-                internship = {
-                    'title': title,
-                    'description': description,
-                    'status': status
-                }
-                internships.append(internship)
-
-    print(internships)
-    # for internship in internships:
-    #     print(f"Название: {internship['name']}")
-    #     print(f"Место проведения: {internship['location']}")
-    #     print(f"Статус набора: {internship['status']}")
-    #     print(f"Ссылка: https://fintech.tinkoff.ru{internship['url']}")
-    #     print("-----")
+    # Загрузка данных из файла
+    with open("../tinkoff.json", "r", encoding="utf-8") as file:
+        json_data = json.load(file)
